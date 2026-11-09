@@ -208,3 +208,115 @@ test('consulta detalhes selecionados e omite campos fora da lista permitida', as
   });
   await client.close();
 });
+
+test('lista tarefas de chamado e valida o acesso individual e o chamado de origem', async () => {
+  let sessionCount = 0;
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, headers: options.headers });
+    if (url.endsWith('/initSession')) {
+      sessionCount += 1;
+      return jsonResponse({ session_token: `sessao-${sessionCount}` });
+    }
+    if (url.includes('/Ticket/77/TicketTask?')) {
+      return jsonResponse([{ id: 301 }, { id: 302 }, { id: 303 }, { id: 304 }]);
+    }
+    if (url.endsWith('/TicketTask/301')) {
+      return jsonResponse({
+        id: 301,
+        tickets_id: 77,
+        content: 'Tarefa visível',
+        date: '2026-11-08 10:00:00',
+        is_private: 0,
+        actiontime: 600,
+        state: 1,
+        password: 'campo não permitido',
+      });
+    }
+    if (url.endsWith('/TicketTask/302')) {
+      return jsonResponse(['ERROR_RIGHT_MISSING', 'mensagem interna do GLPI'], 403);
+    }
+    if (url.endsWith('/TicketTask/303')) {
+      return jsonResponse({ id: 303, tickets_id: 78, content: 'Outro chamado' });
+    }
+    if (url.endsWith('/TicketTask/304')) {
+      return jsonResponse({ id: 304, tickets_id: 77, content: 'Tarefa privada autorizada', is_private: 1 });
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+
+  const client = new GlpiClient(config, fetchMock);
+  const result = await client.listChildItems('Ticket', 77, 'TicketTask', { offset: 0, limit: 10 });
+  assert.deepEqual(result, {
+    parentId: 77,
+    parentUrl: 'https://glpi.exemplo.com/instancia/front/ticket.form.php?id=77',
+    tasks: [
+      {
+        id: 301,
+        tickets_id: 77,
+        content: 'Tarefa visível',
+        date: '2026-11-08 10:00:00',
+        is_private: 0,
+        actiontime: 600,
+        state: 1,
+        url: 'https://glpi.exemplo.com/instancia/front/ticket.form.php?id=77',
+      },
+      {
+        id: 304,
+        tickets_id: 77,
+        content: 'Tarefa privada autorizada',
+        is_private: 1,
+        url: 'https://glpi.exemplo.com/instancia/front/ticket.form.php?id=77',
+      },
+    ],
+  });
+  assert.equal(sessionCount, 1);
+  assert.ok(requests.some(({ url }) => url.includes('/Ticket/77/TicketTask?range=0-9')));
+  assert.ok(requests.every(({ headers }) => headers['App-Token'] === config.appToken));
+  await client.close();
+});
+
+test('lista tarefas de projeto e devolve campos de prazo, estado e progresso', async () => {
+  const fetchMock = async (url) => {
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.includes('/Project/19/ProjectTask?')) {
+      return jsonResponse([{ id: 401 }]);
+    }
+    if (url.endsWith('/ProjectTask/401')) {
+      return jsonResponse({
+        id: 401,
+        projects_id: 19,
+        projecttasks_id: 0,
+        name: 'Tarefa de projeto',
+        content: 'Detalhes',
+        projectstates_id: 2,
+        percent_done: 45,
+        plan_start_date: '2026-11-01',
+        plan_end_date: '2026-11-30',
+        is_milestone: 0,
+        users_id: 9,
+        date: '2026-10-31 12:00:00',
+        date_mod: '2026-11-01 09:00:00',
+      });
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(config, fetchMock);
+
+  const result = await client.listChildItems('Project', 19, 'ProjectTask', { offset: 0, limit: 20 });
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].projects_id, 19);
+  assert.equal(result.tasks[0].percent_done, 45);
+  assert.equal(result.tasks[0].projectstates_id, 2);
+  assert.equal(result.tasks[0].plan_end_date, '2026-11-30');
+  assert.equal(result.tasks[0].url, 'https://glpi.exemplo.com/instancia/front/project.form.php?id=19');
+  await client.close();
+});

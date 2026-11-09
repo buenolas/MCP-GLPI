@@ -33,6 +33,23 @@ const RESOURCE_MAP = Object.freeze({
       'plan_start_date', 'plan_end_date', 'entities_id', 'users_id', 'date', 'date_mod',
     ],
   },
+  TicketTask: {
+    parentType: 'Ticket',
+    parentForeignKey: 'tickets_id',
+    detailFields: [
+      'id', 'tickets_id', 'taskcategories_id', 'date', 'users_id', 'users_id_tech',
+      'groups_id_tech', 'content', 'is_private', 'actiontime', 'begin', 'end', 'state',
+    ],
+  },
+  ProjectTask: {
+    parentType: 'Project',
+    parentForeignKey: 'projects_id',
+    detailFields: [
+      'id', 'projects_id', 'projecttasks_id', 'name', 'content', 'projectstates_id',
+      'percent_done', 'plan_start_date', 'plan_end_date', 'is_milestone', 'users_id',
+      'date', 'date_mod',
+    ],
+  },
 });
 
 export class GlpiApiError extends Error {
@@ -129,10 +146,57 @@ export class GlpiClient {
         .map((field) => [field, payload[field]]),
     );
 
+    const parentId = resource.parentType ? Number(record[resource.parentForeignKey]) : undefined;
     return {
       ...record,
       id: Number(record.id ?? id),
-      url: this.recordUrl(itemType, id),
+      url: resource.parentType
+        ? Number.isSafeInteger(parentId) && parentId > 0
+          ? this.recordUrl(resource.parentType, parentId)
+          : null
+        : this.recordUrl(itemType, id),
+    };
+  }
+
+  async listChildItems(parentType, parentId, childType, { offset, limit }) {
+    this.#getResource(parentType);
+    const childResource = this.#getResource(childType);
+    if (childResource.parentType !== parentType || !Number.isSafeInteger(parentId) || parentId <= 0) {
+      throw new GlpiApiError('O recurso e o registro de destino não são compatíveis.');
+    }
+
+    const end = offset + limit - 1;
+    const payload = await this.#request(`${parentType}/${parentId}/${childType}?range=${offset}-${end}`);
+    const rawRows = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.data)
+        ? payload.data
+        : Object.values(payload ?? {});
+    const childIds = [...new Set(rawRows
+      .filter((row) => row && typeof row === 'object')
+      .map((row) => Number(row.id))
+      .filter((id) => Number.isSafeInteger(id) && id > 0))];
+
+    const tasks = await mapWithConcurrency(childIds, 4, async (childId) => {
+      try {
+        // A nested collection can include rows that fail the per-item permission check.
+        const task = await this.getItem(childType, childId);
+        if (Number(task[childResource.parentForeignKey]) !== parentId) {
+          return null;
+        }
+        return task;
+      } catch (error) {
+        if (error instanceof GlpiApiError && [401, 403, 404].includes(error.status)) {
+          return null;
+        }
+        throw error;
+      }
+    });
+
+    return {
+      parentId,
+      parentUrl: this.recordUrl(parentType, parentId),
+      tasks: tasks.filter(Boolean),
     };
   }
 
@@ -279,4 +343,30 @@ export class GlpiClient {
     }
     return `O GLPI respondeu com HTTP ${status}.`;
   }
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  const errors = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        results[index] = await mapper(items[index]);
+      } catch (error) {
+        errors[index] = error;
+      }
+    }
+  });
+
+  await Promise.all(workers);
+  const firstError = errors.find(Boolean);
+  if (firstError) {
+    throw firstError;
+  }
+  return results;
 }

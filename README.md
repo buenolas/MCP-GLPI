@@ -30,6 +30,10 @@ O servidor usa o transporte MCP `stdio`. No Claude Desktop, o comando local de d
 - `diagnosticar_conexao` testa a sessão e informa o perfil e a entidade ativos.
 - `buscar_chamados` e `buscar_projetos` pesquisam pelo nome. Aceitam `limit` entre 1 e 50 e `offset` para paginação.
 - `consultar_chamado` e `consultar_projeto` consultam um registro pelo ID.
+- `listar_tarefas_chamado` exige `ticket_id` e lista somente as tarefas que a conta pode consultar.
+- `listar_tarefas_projeto` exige `project_id` e retorna as tarefas com prazo, estado e progresso.
+
+As ferramentas de listagem de tarefas aceitam `limit` entre 1 e 50 e `offset` para paginação.
 
 As ferramentas respeitam o perfil e a entidade ativos da conta GLPI. As buscas selecionam campos da API necessários para os resultados, e as consultas por ID retornam somente os campos previstos para cada recurso. Chamados e projetos incluem o link correspondente na interface do GLPI.
 
