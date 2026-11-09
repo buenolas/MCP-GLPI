@@ -1,0 +1,10 @@
+node_modules/
+coverage/
+dist/
+.env
+.env.*
+!.env.example
+credenciais.txt
+credentials.txt
+glpi.credentials.txt
+*.secret.txt
