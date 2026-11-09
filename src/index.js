@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 const server = new McpServer({
   name: 'mcp-glpi-local',
-  version: '0.1.0',
+  version: '0.2.0',
 });
 
 let clientPromise;
@@ -15,7 +15,7 @@ function toolError(error) {
   if (error instanceof ConfigurationError || error instanceof GlpiApiError) {
     return error.message;
   }
-  return 'Falha inesperada ao consultar o GLPI.';
+  return 'Falha inesperada ao executar a operação no GLPI.';
 }
 
 function registerSearchTool(name, title, itemType, description) {
@@ -104,6 +104,50 @@ function registerTaskListTool(name, title, parentIdField, parentType, childType,
   );
 }
 
+function registerMutationTool(name, title, description, inputSchema, handler) {
+  server.registerTool(
+    name,
+    {
+      title,
+      description,
+      inputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async (input) => {
+      try {
+        const client = await getClient();
+        const result = await handler(client, input);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+          structuredContent: result,
+        };
+      } catch (error) {
+        return { content: [{ type: 'text', text: toolError(error) }], isError: true };
+      }
+    },
+  );
+}
+
+const glpiDateTime = z.string().trim().regex(
+  /^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?$/u,
+  'Use AAAA-MM-DD ou AAAA-MM-DD HH:mm:ss.',
+);
+const ticketFields = {
+  name: z.string().trim().min(1).max(255).optional().describe('Título do chamado.'),
+  content: z.string().trim().min(1).max(10_000).optional().describe('Descrição do chamado.'),
+  priority: z.number().int().min(1).max(6).optional().describe('Prioridade GLPI, de 1 a 6.'),
+  urgency: z.number().int().min(1).max(5).optional().describe('Urgência GLPI, de 1 a 5.'),
+  impact: z.number().int().min(1).max(5).optional().describe('Impacto GLPI, de 1 a 5.'),
+  itilcategories_id: z.number().int().positive().optional().describe('ID da categoria ITIL, se conhecida.'),
+  due_date: glpiDateTime.optional().describe('Prazo no formato AAAA-MM-DD ou AAAA-MM-DD HH:mm:ss.'),
+};
+const ticketTaskFields = {
+  content: z.string().trim().min(1).max(10_000).optional().describe('Descrição da tarefa.'),
+  is_private: z.boolean().optional().describe('Define se a tarefa é privada. A API aplica as permissões da conta.'),
+  actiontime: z.number().int().min(0).max(2_147_483_647).optional().describe('Tempo registrado em segundos.'),
+  taskcategories_id: z.number().int().positive().optional().describe('ID da categoria da tarefa, se conhecida.'),
+};
+
 async function getClient() {
   if (!clientPromise) {
     clientPromise = loadConfig(process.env.GLPI_CONFIG_PATH).then(
@@ -174,6 +218,61 @@ registerTaskListTool(
   'Project',
   'ProjectTask',
   'Lista tarefas de um projeto pelo ID e retorna prazo, estado e progresso disponíveis para a conta GLPI.',
+);
+
+registerMutationTool(
+  'abrir_chamado',
+  'Abrir chamado',
+  'Cria um novo chamado executando como a conta GLPI configurada. A ferramenta não aceita trocar entidade nem informar outro usuário; o GLPI aplica o perfil e a entidade ativa. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  {
+    name: ticketFields.name.unwrap(),
+    content: ticketFields.content.unwrap(),
+    type: z.number().int().min(1).max(2).optional().describe('Tipo GLPI: 1 incidente, 2 requisição.'),
+    priority: ticketFields.priority,
+    urgency: ticketFields.urgency,
+    impact: ticketFields.impact,
+    itilcategories_id: ticketFields.itilcategories_id,
+    due_date: ticketFields.due_date,
+  },
+  (client, input) => client.createTicket(input),
+);
+
+registerMutationTool(
+  'atualizar_chamado',
+  'Atualizar chamado',
+  'Atualiza somente título, descrição, status, prioridade, urgência, impacto, categoria ou prazo do chamado indicado. Use o ID do resultado escolhido; se a busca tiver nomes repetidos, apresente as opções e aguarde a escolha explícita antes de gravar. O GLPI aplica as permissões da conta. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  {
+    id: z.number().int().positive().describe('ID do chamado a atualizar.'),
+    ...ticketFields,
+    status: z.number().int().min(1).max(6).optional().describe('Status GLPI de 1 a 6.'),
+  },
+  (client, { id, ...input }) => client.updateTicket(id, input),
+);
+
+registerMutationTool(
+  'criar_tarefa_chamado',
+  'Criar tarefa de chamado',
+  'Cria uma tarefa vinculada ao chamado indicado pelo ticket_id. Não use esta ferramenta para tarefas de projeto. Para nomes repetidos, apresente os chamados encontrados e aguarde a escolha explícita antes de gravar. A autoria é definida pela conta GLPI; tarefas privadas continuam sujeitas às permissões dela. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  {
+    ticket_id: z.number().int().positive().describe('ID do chamado de destino.'),
+    content: z.string().trim().min(1).max(10_000).describe('Descrição da tarefa.'),
+    is_private: z.boolean().default(false).describe('Define se a tarefa será privada.'),
+    actiontime: ticketTaskFields.actiontime,
+    taskcategories_id: ticketTaskFields.taskcategories_id,
+  },
+  (client, { ticket_id, ...input }) => client.createTicketTask(ticket_id, input),
+);
+
+registerMutationTool(
+  'atualizar_tarefa_chamado',
+  'Atualizar tarefa de chamado',
+  'Atualiza uma tarefa de chamado identificada por ticket_id e task_id. O servidor confere que a tarefa pertence ao chamado antes da gravação. Se o chamado for identificado por nome e a busca retornar nomes repetidos, apresente as opções e aguarde a escolha explícita. Não use para tarefas de projeto. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  {
+    ticket_id: z.number().int().positive().describe('ID do chamado ao qual a tarefa pertence.'),
+    task_id: z.number().int().positive().describe('ID da tarefa de chamado.'),
+    ...ticketTaskFields,
+  },
+  (client, { ticket_id, task_id, ...input }) => client.updateTicketTask(ticket_id, task_id, input),
 );
 
 const transport = new StdioServerTransport();

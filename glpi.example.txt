@@ -2,3 +2,4 @@
 GLPI_URL=https://glpi.exemplo.com
 GLPI_USER_TOKEN=token_ficticio_individual
 GLPI_APP_TOKEN=token_ficticio_do_cliente
+GLPI_ENABLE_WRITES=false
