@@ -18,12 +18,16 @@ Durante a instalação da extensão, selecione esse arquivo no campo **Arquivo d
 ## Instalação no Claude Desktop
 
 1. Crie seu arquivo `.txt` de configuração a partir de [`glpi.example.txt`](glpi.example.txt) e salve-o fora deste repositório.
-2. Baixe `mcp-glpi-local-0.3.0.mcpb` em [Releases](https://github.com/buenolas/MCP-GLPI/releases/latest).
+2. Baixe `mcp-glpi-local-0.3.1.mcpb` em [Releases](https://github.com/buenolas/MCP-GLPI/releases/latest).
 3. No Claude Desktop, abra **Settings → Desktop app → Manage → Advanced settings → Install Extension…** e selecione o `.mcpb` baixado.
 4. Quando solicitado, selecione seu arquivo `.txt` no campo **Arquivo de configuração do GLPI**.
 5. Abra uma conversa, consulte a lista de ferramentas e execute `diagnosticar_conexao`.
 
 O pacote usa o runtime incluído no Claude Desktop, portanto colegas não precisam instalar Node.js para usar a extensão. As gravações continuam desligadas por padrão. Para habilitá-las, altere `GLPI_ENABLE_WRITES=false` para `true` no arquivo local e reinicie a extensão. O perfil e a entidade da conta GLPI selecionada continuam controlando as operações.
+
+## Se as ferramentas não aparecerem
+
+Confirme em **Settings → Desktop app → Manage → Extensions** que o MCP do GLPI está ativado. Se os registros mostrarem `Version negotiation failed` ou `Server disconnected`, atualize para a versão `0.3.1`, reinicie o Claude Desktop e abra uma conversa nova. Essa versão usa a entrada stdio atual do SDK MCP e negocia o protocolo antes de carregar as ferramentas. O diagnóstico de conexão com o GLPI só roda quando `diagnosticar_conexao` é chamado; a lista de ferramentas deve carregar mesmo antes dessa chamada.
 
 ## Desenvolvimento
 
@@ -41,7 +45,7 @@ npm ci
 npm run package:mcpb
 ```
 
-O arquivo será criado em `dist/mcp-glpi-local-0.3.0.mcpb`. O empacotador monta uma pasta temporária com uma lista explícita de arquivos de runtime e instala somente dependências de produção nessa pasta; arquivos `.txt` locais, inclusive credenciais, não são copiados. A publicação automatizada no GitHub é iniciada por uma tag `v` igual à versão em `package.json` e `manifest.json` (por exemplo, `v0.3.0`).
+O arquivo será criado em `dist/mcp-glpi-local-0.3.1.mcpb`. O empacotador monta uma pasta temporária com uma lista explícita de arquivos de runtime e instala somente dependências de produção nessa pasta; arquivos `.txt` locais, inclusive credenciais, não são copiados. A publicação automatizada no GitHub é iniciada por uma tag `v` igual à versão em `package.json` e `manifest.json` (por exemplo, `v0.3.1`).
 
 ## Ferramentas disponíveis
 
