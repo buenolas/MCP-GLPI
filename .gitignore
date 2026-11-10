@@ -7,4 +7,5 @@ dist/
 credenciais.txt
 credentials.txt
 glpi.credentials.txt
+glpi_config.txt
 *.secret.txt

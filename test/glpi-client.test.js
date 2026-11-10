@@ -26,6 +26,16 @@ test('diagnóstico abre uma sessão, consulta perfil e entidade e a reutiliza', 
     if (url.endsWith('/getActiveProfile')) {
       return jsonResponse({ active_profile: { id: 3, name: 'Técnico' } });
     }
+    if (url.endsWith('/getFullSession')) {
+      return jsonResponse({ session: {
+        glpiID: '33',
+        glpifirstname: 'Ana',
+        glpirealname: 'Silva',
+        glpiname: 'asilva',
+        glpiactive_entity_name: 'Atendimento',
+        privateValue: 'não deve sair',
+      } });
+    }
     if (url.endsWith('/getActiveEntities')) {
       return jsonResponse({ active_entity: { id: 8, active_entity_recursive: true } });
     }
@@ -39,8 +49,10 @@ test('diagnóstico abre uma sessão, consulta perfil e entidade e a reutiliza', 
   const result = await client.diagnose();
   assert.deepEqual(result, {
     status: 'connected',
+    userId: 33,
+    userName: 'Ana Silva',
     activeProfile: { id: 3, name: 'Técnico' },
-    activeEntity: { id: 8, recursive: true },
+    activeEntity: { id: 8, name: 'Atendimento', recursive: true },
   });
   assert.equal(requests.filter(({ url }) => url.endsWith('/initSession')).length, 1);
   assert.ok(requests.every(({ url }) => url.startsWith('https://glpi.exemplo.com/instancia/apirest.php/')));
@@ -62,6 +74,9 @@ test('renova a sessão uma vez quando o GLPI rejeita um token expirado', async (
         return jsonResponse({ message: 'mensagem interna da sessão expirada' }, 401);
       }
       return jsonResponse({ active_profile: { id: 3, name: 'Técnico' } });
+    }
+    if (url.endsWith('/getFullSession')) {
+      return jsonResponse({ session: { glpiID: '33', privateValue: 'não deve sair' } });
     }
     if (url.endsWith('/getActiveEntities')) {
       return jsonResponse({ active_entity: { id: 8, active_entity_recursive: false } });

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mcp-glpi-local",
   "display_name": "MCP do GLPI",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Conecta o Claude Desktop ao GLPI usando as permissões da conta local.",
   "long_description": "Servidor MCP local para consultar e atualizar chamados, tarefas de chamado, projetos e tarefas de projeto. A extensão lê um arquivo de configuração .txt selecionado durante a instalação. Os tokens permanecem nesse arquivo local, e as gravações ficam desabilitadas por padrão.",
   "author": {
@@ -47,7 +47,7 @@
     }
   },
   "tools": [
-    { "name": "diagnosticar_conexao", "description": "Verifica autenticação, perfil e entidade ativos." },
+    { "name": "diagnosticar_conexao", "description": "Mostra o nome e o ID do usuário autenticado, do perfil ativo e da entidade ativa." },
     { "name": "buscar_chamados", "description": "Busca chamados respeitando as permissões da conta." },
     { "name": "consultar_chamado", "description": "Consulta um chamado pelo ID." },
     { "name": "listar_tarefas_chamado", "description": "Lista tarefas visíveis de um chamado, incluindo privadas quando permitidas." },

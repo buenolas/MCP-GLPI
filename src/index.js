@@ -4,7 +4,8 @@ import { ConfigurationError, loadConfig } from './config.js';
 import { GlpiApiError, GlpiClient } from './glpi-client.js';
 import * as z from 'zod/v4';
 
-let clientPromise;
+let client;
+let activeConfig;
 
 function toolError(error) {
   if (error instanceof ConfigurationError || error instanceof GlpiApiError) {
@@ -190,25 +191,28 @@ const projectTaskFields = {
 };
 
 async function getClient() {
-  if (!clientPromise) {
-    clientPromise = loadConfig(process.env.GLPI_CONFIG_PATH).then(
-      (config) => new GlpiClient(config),
-    );
+  const config = await loadConfig(process.env.GLPI_CONFIG_PATH);
+  if (activeConfig && Object.keys(config).some((key) => config[key] !== activeConfig[key])) {
+    throw new ConfigurationError('A configuração do GLPI mudou. Encerre completamente o Claude Desktop e abra novamente para iniciar uma nova sessão.');
   }
-  return clientPromise;
+  if (!client) {
+    client = new GlpiClient(config);
+    activeConfig = config;
+  }
+  return client;
 }
 
 function createServer() {
   const server = new McpServer({
     name: 'mcp-glpi-local',
-    version: '0.3.2',
+    version: '0.3.3',
   });
 
   server.registerTool(
   'diagnosticar_conexao',
   {
     title: 'Diagnosticar conexão com o GLPI',
-    description: 'Testa a autenticação e informa o perfil e a entidade ativos da conta configurada.',
+    description: 'Mostra o nome e o ID do usuário autenticado, do perfil ativo e da entidade ativa. Identifique cada um pelo seu rótulo.',
     inputSchema: z.object({}),
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
@@ -400,7 +404,6 @@ const handle = serveStdio(createServer);
 
 async function shutdown() {
   try {
-    const client = await clientPromise;
     await client?.close();
   } catch {
     // O servidor pode encerrar normalmente sem configuração ou sem sessão ativa.

@@ -101,21 +101,32 @@ export class GlpiClient {
   }
 
   async diagnose() {
-    const [profile, entityState] = await Promise.all([
+    const [profile, entityState, sessionState] = await Promise.all([
       this.#request('getActiveProfile'),
       this.#request('getActiveEntities'),
+      this.#request('getFullSession'),
     ]);
 
+    const session = sessionState?.session;
+    const rawUserId = session?.glpiID;
+    const userId = typeof rawUserId === 'string' && /^\d+$/u.test(rawUserId) ? Number(rawUserId) : rawUserId;
+    const fullName = [session?.glpifirstname, session?.glpirealname]
+      .filter((part) => typeof part === 'string' && part.trim())
+      .map((part) => part.trim())
+      .join(' ');
     const activeProfile = profile?.active_profile ?? profile;
     const activeEntity = entityState?.active_entity;
     return {
       status: 'connected',
+      userId: Number.isSafeInteger(userId) && userId > 0 ? userId : null,
+      userName: fullName || session?.glpiname || null,
       activeProfile: {
         id: activeProfile?.id ?? null,
         name: activeProfile?.name ?? null,
       },
       activeEntity: {
         id: activeEntity?.id ?? null,
+        name: activeEntity?.name ?? session?.glpiactive_entity_name ?? null,
         recursive: Boolean(activeEntity?.active_entity_recursive),
       },
     };
