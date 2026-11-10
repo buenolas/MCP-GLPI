@@ -1,6 +1,6 @@
 {
   "name": "mcp-glpi-local",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "Servidor MCP local para integrar o Claude Desktop ao GLPI",
@@ -13,7 +13,7 @@
     "package:mcpb": "node scripts/package-mcpb.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@modelcontextprotocol/server": "^2.4.0",
     "zod": "^4.6.7"
   }
 }
