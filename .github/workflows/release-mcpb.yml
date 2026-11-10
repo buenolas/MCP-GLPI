@@ -36,13 +36,18 @@ jobs:
       - name: Build the MCPB bundle
         run: npm run package:mcpb
 
-      - name: Publish GitHub Release
+      - name: Publish or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           VERSION="$(node -p "require('./package.json').version")"
-          gh release create "$GITHUB_REF_NAME" "dist/mcp-glpi-local-$VERSION.mcpb" \
-            --verify-tag \
-            --title "MCP do GLPI $VERSION" \
-            --generate-notes
+          ASSET="dist/mcp-glpi-local-$VERSION.mcpb"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ASSET" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$ASSET" \
+              --verify-tag \
+              --title "MCP do GLPI $VERSION" \
+              --generate-notes
+          fi
