@@ -1,0 +1,67 @@
+{
+  "manifest_version": "0.3",
+  "name": "mcp-glpi-local",
+  "display_name": "MCP do GLPI",
+  "version": "0.3.0",
+  "description": "Conecta o Claude Desktop ao GLPI usando as permissões da conta local.",
+  "long_description": "Servidor MCP local para consultar e atualizar chamados, tarefas de chamado, projetos e tarefas de projeto. A extensão lê um arquivo de configuração .txt selecionado durante a instalação. Os tokens permanecem nesse arquivo local, e as gravações ficam desabilitadas por padrão.",
+  "author": {
+    "name": "Equipe MCP GLPI"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/buenolas/MCP-GLPI.git"
+  },
+  "homepage": "https://github.com/buenolas/MCP-GLPI",
+  "documentation": "https://github.com/buenolas/MCP-GLPI#readme",
+  "support": "https://github.com/buenolas/MCP-GLPI/issues",
+  "server": {
+    "type": "node",
+    "entry_point": "src/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/src/index.js"
+      ],
+      "env": {
+        "GLPI_CONFIG_PATH": "${user_config.credentials_file}"
+      }
+    }
+  },
+  "user_config": {
+    "credentials_file": {
+      "type": "file",
+      "title": "Arquivo de configuração do GLPI",
+      "description": "Selecione seu arquivo .txt local com GLPI_URL, GLPI_USER_TOKEN e GLPI_APP_TOKEN quando exigido pela instância.",
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "win32",
+      "darwin",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=20"
+    }
+  },
+  "tools": [
+    { "name": "diagnosticar_conexao", "description": "Verifica autenticação, perfil e entidade ativos." },
+    { "name": "buscar_chamados", "description": "Busca chamados respeitando as permissões da conta." },
+    { "name": "consultar_chamado", "description": "Consulta um chamado pelo ID." },
+    { "name": "listar_tarefas_chamado", "description": "Lista tarefas visíveis de um chamado, incluindo privadas quando permitidas." },
+    { "name": "buscar_projetos", "description": "Busca projetos respeitando as permissões da conta." },
+    { "name": "consultar_projeto", "description": "Consulta um projeto pelo ID." },
+    { "name": "listar_tarefas_projeto", "description": "Lista tarefas de um projeto." },
+    { "name": "listar_estados_projeto", "description": "Lista estados disponíveis para projetos e tarefas de projeto." },
+    { "name": "abrir_chamado", "description": "Cria um chamado quando gravações estão habilitadas." },
+    { "name": "atualizar_chamado", "description": "Atualiza campos selecionados de um chamado." },
+    { "name": "criar_tarefa_chamado", "description": "Cria uma tarefa vinculada ao chamado indicado." },
+    { "name": "atualizar_tarefa_chamado", "description": "Atualiza uma tarefa pertencente ao chamado indicado." },
+    { "name": "criar_projeto", "description": "Cria um projeto quando gravações estão habilitadas." },
+    { "name": "atualizar_projeto", "description": "Atualiza campos selecionados de um projeto." },
+    { "name": "criar_tarefa_projeto", "description": "Cria uma tarefa vinculada ao projeto indicado." },
+    { "name": "atualizar_tarefa_projeto", "description": "Atualiza uma tarefa pertencente ao projeto indicado." }
+  ]
+}

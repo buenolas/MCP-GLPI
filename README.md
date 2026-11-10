@@ -4,7 +4,8 @@ Servidor MCP local para Claude Desktop. O servidor inclui um cliente compartilha
 
 ## Requisitos
 
-- Node.js 20 ou superior
+- Claude Desktop atualizado
+- Node.js 20 ou superior somente para desenvolvimento e empacotamento; a extensão instalada usa o runtime do Claude Desktop
 - A API REST legada habilitada no GLPI
 - Token individual de usuário e, quando exigido pela instância, o token do cliente de API
 
@@ -12,7 +13,17 @@ Servidor MCP local para Claude Desktop. O servidor inclui um cliente compartilha
 
 Copie [`glpi.example.txt`](glpi.example.txt) para um arquivo local fora deste repositório. Preencha `GLPI_URL`, `GLPI_USER_TOKEN` e `GLPI_APP_TOKEN` com os dados da sua instância. O token do cliente pode ficar vazio quando o GLPI não o exigir. `GLPI_ENABLE_WRITES` fica `false` por padrão; altere para `true` somente quando quiser habilitar ferramentas de gravação naquela instalação local.
 
-Indique ao servidor o caminho absoluto desse arquivo por meio da variável `GLPI_CONFIG_PATH`. Não compartilhe nem inclua o arquivo preenchido no GitHub.
+Durante a instalação da extensão, selecione esse arquivo no campo **Arquivo de configuração do GLPI**. O caminho é salvo na configuração local da extensão; o arquivo preenchido não é copiado para o pacote. Não compartilhe nem inclua o arquivo preenchido no GitHub.
+
+## Instalação no Claude Desktop
+
+1. Crie seu arquivo `.txt` de configuração a partir de [`glpi.example.txt`](glpi.example.txt) e salve-o fora deste repositório.
+2. Baixe `mcp-glpi-local-0.3.0.mcpb` em [Releases](https://github.com/buenolas/MCP-GLPI/releases/latest).
+3. No Claude Desktop, abra **Settings → Desktop app → Manage → Advanced settings → Install Extension…** e selecione o `.mcpb` baixado.
+4. Quando solicitado, selecione seu arquivo `.txt` no campo **Arquivo de configuração do GLPI**.
+5. Abra uma conversa, consulte a lista de ferramentas e execute `diagnosticar_conexao`.
+
+O pacote usa o runtime incluído no Claude Desktop, portanto colegas não precisam instalar Node.js para usar a extensão. As gravações continuam desligadas por padrão. Para habilitá-las, altere `GLPI_ENABLE_WRITES=false` para `true` no arquivo local e reinicie a extensão. O perfil e a entidade da conta GLPI selecionada continuam controlando as operações.
 
 ## Desenvolvimento
 
@@ -23,7 +34,14 @@ $env:GLPI_CONFIG_PATH = 'C:\caminho\privado\glpi.txt'
 npm start
 ```
 
-O servidor usa o transporte MCP `stdio`. No Claude Desktop, o comando local de desenvolvimento pode ser configurado para iniciar `node` com o caminho absoluto de `src/index.js` e definir `GLPI_CONFIG_PATH` no ambiente do servidor. A extensão `.mcpb` será preparada na etapa de empacotamento.
+O servidor usa o transporte MCP `stdio`. Para gerar o pacote localmente, execute:
+
+```powershell
+npm ci
+npm run package:mcpb
+```
+
+O arquivo será criado em `dist/mcp-glpi-local-0.3.0.mcpb`. O empacotador monta uma pasta temporária com uma lista explícita de arquivos de runtime e instala somente dependências de produção nessa pasta; arquivos `.txt` locais, inclusive credenciais, não são copiados. A publicação automatizada no GitHub é iniciada por uma tag `v` igual à versão em `package.json` e `manifest.json` (por exemplo, `v0.3.0`).
 
 ## Ferramentas disponíveis
 

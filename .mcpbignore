@@ -1,0 +1,16 @@
+# Segredos e configurações locais
+*.txt
+*.secret.*
+credenciais.txt
+credentials.txt
+glpi.credentials.txt
+
+# Arquivos de desenvolvimento e artefatos
+.git/
+.github/
+node_modules/.cache/
+node_modules/.package-lock.json
+test/
+scripts/
+coverage/
+dist/

@@ -1,0 +1,48 @@
+name: Build and publish MCPB release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Confirm tag matches the manifest version
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "Tag $GITHUB_REF_NAME não corresponde à versão v$VERSION do pacote."
+            exit 1
+          fi
+
+      - name: Build the MCPB bundle
+        run: npm run package:mcpb
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          gh release create "$GITHUB_REF_NAME" "dist/mcp-glpi-local-$VERSION.mcpb" \
+            --verify-tag \
+            --title "MCP do GLPI $VERSION" \
+            --generate-notes
