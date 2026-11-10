@@ -7,6 +7,7 @@ const config = {
   userToken: 'token-de-teste-nao-real',
   appToken: 'app-de-teste-nao-real',
 };
+const writeConfig = { ...config, writesEnabled: true };
 
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -319,4 +320,215 @@ test('lista tarefas de projeto e devolve campos de prazo, estado e progresso', a
   assert.equal(result.tasks[0].plan_end_date, '2026-11-30');
   assert.equal(result.tasks[0].url, 'https://glpi.exemplo.com/instancia/front/project.form.php?id=19');
   await client.close();
+});
+
+test('bloqueia gravações por padrão antes de abrir uma sessão', async () => {
+  let requestCount = 0;
+  const client = new GlpiClient(config, async () => {
+    requestCount += 1;
+    return jsonResponse({ session_token: 'sessao-ficticia' });
+  });
+
+  await assert.rejects(client.createTicket({ name: 'Chamado de teste', content: 'Descrição' }), /gravações estão desativadas/u);
+  assert.equal(requestCount, 0);
+});
+
+test('cria e atualiza chamado com POST/PUT, session_write e campos em allowlist', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/Ticket/?session_write=true') && options.method === 'POST') {
+      return jsonResponse({ id: 91, message: 'criado' }, 201);
+    }
+    if (url.endsWith('/Ticket/91?session_write=true') && options.method === 'PUT') {
+      return jsonResponse([{ 91: true, message: '' }]);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  const created = await client.createTicket({
+    name: 'Chamado de teste',
+    content: 'Descrição de teste',
+    priority: 3,
+    entities_id: 999,
+    users_id_recipient: 999,
+  });
+  const updated = await client.updateTicket(91, { priority: 2, users_id_recipient: 999 });
+
+  assert.deepEqual(created, {
+    id: 91,
+    url: 'https://glpi.exemplo.com/instancia/front/ticket.form.php?id=91',
+  });
+  assert.deepEqual(updated, created);
+
+  const createRequest = requests.find(({ method, url }) => method === 'POST' && url.includes('/Ticket/'));
+  assert.equal(createRequest.headers['Content-Type'], 'application/json');
+  assert.equal(createRequest.headers['App-Token'], config.appToken);
+  assert.deepEqual(JSON.parse(createRequest.body), {
+    input: { name: 'Chamado de teste', content: 'Descrição de teste', priority: 3 },
+  });
+
+  const updateRequest = requests.find(({ method, url }) => method === 'PUT');
+  assert.ok(updateRequest.url.includes('session_write=true'));
+  assert.deepEqual(JSON.parse(updateRequest.body), { input: { id: 91, priority: 2 } });
+  await client.close();
+});
+
+test('cria tarefa de chamado com vínculo explícito e devolve o link do chamado', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/TicketTask/?session_write=true') && options.method === 'POST') {
+      return jsonResponse({ id: 301, message: 'criada' }, 201);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  const result = await client.createTicketTask(77, {
+    content: 'Tarefa de teste',
+    is_private: true,
+    actiontime: 600,
+    users_id: 999,
+  });
+
+  assert.deepEqual(result, {
+    id: 301,
+    parentId: 77,
+    url: 'https://glpi.exemplo.com/instancia/front/ticket.form.php?id=77',
+  });
+  const createRequest = requests.find(({ method }) => method === 'POST');
+  assert.deepEqual(JSON.parse(createRequest.body), {
+    input: { content: 'Tarefa de teste', is_private: true, actiontime: 600, tickets_id: 77 },
+  });
+  await client.close();
+});
+
+test('confere o chamado de origem antes de atualizar uma tarefa e bloqueia vínculo incompatível', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/TicketTask/301')) {
+      return jsonResponse({ id: 301, tickets_id: 78, content: 'Tarefa existente' });
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  await assert.rejects(
+    client.updateTicketTask(77, 301, { content: 'Novo conteúdo' }),
+    /não pertence ao chamado informado/u,
+  );
+  assert.equal(requests.some(({ method }) => method === 'PUT'), false);
+  await client.close();
+});
+
+test('trata resposta parcial e falha de rede de gravação sem expor detalhes', async () => {
+  const partialClient = new GlpiClient(writeConfig, async (url) => {
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    return jsonResponse({ message: 'resposta interna confidencial' }, 207);
+  });
+  await assert.rejects(
+    partialClient.createTicket({ name: 'Chamado de teste', content: 'Descrição' }),
+    (error) => {
+      assert.match(error.message, /gravação parcial/u);
+      assert.match(error.message, /antes de repetir/u);
+      assert.doesNotMatch(error.message, /confidencial/u);
+      return true;
+    },
+  );
+
+  const networkClient = new GlpiClient(writeConfig, async (url) => {
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    throw new Error('app-de-teste-nao-real e detalhe privado');
+  });
+  await assert.rejects(
+    networkClient.createTicket({ name: 'Chamado de teste', content: 'Descrição' }),
+    (error) => {
+      assert.match(error.message, /Consulte o GLPI antes/u);
+      assert.doesNotMatch(error.message, /app-de-teste|detalhe privado/u);
+      return true;
+    },
+  );
+});
+
+test('serializa gravações para não concorrer com sessões em modo de escrita', async () => {
+  let activeWrites = 0;
+  let maxActiveWrites = 0;
+  let nextId = 1;
+  const fetchMock = async (url, options) => {
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/Ticket/?session_write=true') && options.method === 'POST') {
+      activeWrites += 1;
+      maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeWrites -= 1;
+      nextId += 1;
+      return jsonResponse({ id: nextId, message: 'criado' }, 201);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  const results = await Promise.all([
+    client.createTicket({ name: 'Chamado A', content: 'Descrição A' }),
+    client.createTicket({ name: 'Chamado B', content: 'Descrição B' }),
+  ]);
+
+  assert.equal(results.length, 2);
+  assert.equal(maxActiveWrites, 1);
+  await client.close();
+});
+
+test('não declara atualização concluída quando o GLPI devolve falha no corpo', async () => {
+  const fetchMock = async (url) => {
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/Ticket/91?session_write=true')) {
+      return jsonResponse([{ 91: false, message: 'detalhe interno confidencial' }]);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  await assert.rejects(
+    client.updateTicket(91, { priority: 2 }),
+    (error) => {
+      assert.match(error.message, /não confirmou a atualização/u);
+      assert.doesNotMatch(error.message, /confidencial/u);
+      return true;
+    },
+  );
 });

@@ -53,10 +53,16 @@ export function parseConfig(text) {
     throw new ConfigurationError('GLPI_URL precisa ser uma URL HTTPS válida, sem usuário, senha ou parâmetros.');
   }
 
+  const writesValue = values.get('GLPI_ENABLE_WRITES')?.toLowerCase();
+  if (writesValue && !['true', 'false'].includes(writesValue)) {
+    throw new ConfigurationError('GLPI_ENABLE_WRITES aceita somente true ou false.');
+  }
+
   return Object.freeze({
     baseUrl: url.toString().replace(/\/$/u, ''),
     userToken: values.get('GLPI_USER_TOKEN'),
     appToken: values.get('GLPI_APP_TOKEN') || undefined,
+    writesEnabled: writesValue === 'true',
   });
 }
 

@@ -15,6 +15,14 @@ const RESOURCE_MAP = Object.freeze({
       'closedate', 'solvedate', 'due_date', 'entities_id', 'locations_id',
       'requesttypes_id', 'users_id_recipient',
     ],
+    createFields: [
+      'name', 'content', 'type', 'urgency', 'impact', 'priority',
+      'itilcategories_id', 'due_date',
+    ],
+    updateFields: [
+      'name', 'content', 'status', 'urgency', 'impact', 'priority',
+      'itilcategories_id', 'due_date',
+    ],
   },
   Project: {
     table: 'glpi_projects',
@@ -40,6 +48,8 @@ const RESOURCE_MAP = Object.freeze({
       'id', 'tickets_id', 'taskcategories_id', 'date', 'users_id', 'users_id_tech',
       'groups_id_tech', 'content', 'is_private', 'actiontime', 'begin', 'end', 'state',
     ],
+    createFields: ['content', 'is_private', 'actiontime', 'taskcategories_id'],
+    updateFields: ['content', 'is_private', 'actiontime', 'taskcategories_id'],
   },
   ProjectTask: {
     parentType: 'Project',
@@ -65,6 +75,7 @@ export class GlpiClient {
   #fetch;
   #sessionToken;
   #sessionPromise;
+  #writeQueue = Promise.resolve();
   #searchOptions = new Map();
 
   constructor(config, fetchImpl = globalThis.fetch) {
@@ -200,6 +211,39 @@ export class GlpiClient {
     };
   }
 
+  async createTicket(input) {
+    const fields = this.#pickWritableFields('Ticket', input, 'createFields');
+    requireText(fields.name, 'O chamado precisa de um título.');
+    requireText(fields.content, 'O chamado precisa de uma descrição.');
+    return this.#createItem('Ticket', fields);
+  }
+
+  async updateTicket(id, input) {
+    const fields = this.#pickWritableFields('Ticket', input, 'updateFields');
+    return this.#updateItem('Ticket', id, fields);
+  }
+
+  async createTicketTask(ticketId, input) {
+    this.#assertWritesEnabled();
+    requirePositiveId(ticketId, 'ID do chamado');
+    const fields = this.#pickWritableFields('TicketTask', input, 'createFields');
+    requireText(fields.content, 'A tarefa precisa de uma descrição.');
+    return this.#createItem('TicketTask', { ...fields, tickets_id: ticketId }, ticketId);
+  }
+
+  async updateTicketTask(ticketId, taskId, input) {
+    this.#assertWritesEnabled();
+    requirePositiveId(ticketId, 'ID do chamado');
+    requirePositiveId(taskId, 'ID da tarefa');
+    const fields = this.#pickWritableFields('TicketTask', input, 'updateFields');
+    const task = await this.getItem('TicketTask', taskId);
+    if (Number(task.tickets_id) !== ticketId) {
+      throw new GlpiApiError('A tarefa não pertence ao chamado informado.');
+    }
+
+    return this.#updateItem('TicketTask', taskId, fields, ticketId);
+  }
+
   recordUrl(itemType, id) {
     const resource = this.#getResource(itemType);
     const base = this.#config.baseUrl.replace(/\/apirest\.php\/?$/u, '').replace(/\/$/u, '');
@@ -220,21 +264,127 @@ export class GlpiClient {
     }
   }
 
-  async #request(path) {
+  async #request(path, { method = 'GET', body } = {}) {
     let sessionToken = await this.#getSession();
-    let response = await this.#send(path, { 'Session-Token': sessionToken });
+    let response = await this.#send(path, { 'Session-Token': sessionToken }, { method, body });
 
     if (response.status === 401) {
       this.#sessionToken = undefined;
       sessionToken = await this.#getSession();
-      response = await this.#send(path, { 'Session-Token': sessionToken });
+      response = await this.#send(path, { 'Session-Token': sessionToken }, { method, body });
+    }
+
+    if (response.status === 207) {
+      throw new GlpiApiError(
+        'O GLPI retornou uma gravação parcial. Confira o registro no GLPI antes de repetir a operação.',
+        response.status,
+      );
     }
 
     if (!response.ok) {
-      throw new GlpiApiError(this.#messageForStatus(response.status), response.status);
+      throw new GlpiApiError(this.#messageForStatus(response.status, method !== 'GET'), response.status);
     }
 
-    return this.#readJson(response);
+    try {
+      return await this.#readJson(response);
+    } catch (error) {
+      if (method !== 'GET') {
+        throw new GlpiApiError(
+          'Não foi possível confirmar o resultado da gravação. Consulte o GLPI antes de repetir a operação.',
+          response.status,
+        );
+      }
+      throw error;
+    }
+  }
+
+  #assertWritesEnabled() {
+    if (!this.#config.writesEnabled) {
+      throw new GlpiApiError('As gravações estão desativadas. Defina GLPI_ENABLE_WRITES=true no arquivo local para habilitá-las.');
+    }
+  }
+
+  #pickWritableFields(itemType, input, fieldSet) {
+    this.#assertWritesEnabled();
+    const resource = this.#getResource(itemType);
+    const allowed = resource[fieldSet];
+    if (!allowed) {
+      throw new GlpiApiError('Gravações não implementadas para este tipo de registro.');
+    }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw new GlpiApiError('Os campos da gravação são inválidos.');
+    }
+
+    const fields = Object.fromEntries(
+      allowed
+        .filter((field) => Object.hasOwn(input, field) && input[field] !== undefined)
+        .map((field) => [field, input[field]]),
+    );
+    if (Object.keys(fields).length === 0) {
+      throw new GlpiApiError('Informe ao menos um campo permitido para atualizar.');
+    }
+    return fields;
+  }
+
+  async #createItem(itemType, input, parentId) {
+    this.#assertWritesEnabled();
+    return this.#serializeWrite(async () => {
+      const payload = await this.#request(`${itemType}/?session_write=true`, {
+        method: 'POST',
+        body: { input },
+      });
+      const id = Number(payload?.id);
+      if (!Number.isSafeInteger(id) || id <= 0) {
+        throw new GlpiApiError('O GLPI não confirmou o ID criado. Consulte o registro antes de tentar novamente.');
+      }
+
+      const resource = this.#getResource(itemType);
+      const recordParentId = resource.parentType ? parentId : undefined;
+      const url = resource.parentType
+        ? this.recordUrl(resource.parentType, recordParentId)
+        : this.recordUrl(itemType, id);
+      return {
+        id,
+        ...(recordParentId ? { parentId: recordParentId } : {}),
+        url,
+      };
+    });
+  }
+
+  async #updateItem(itemType, id, input, parentId) {
+    this.#assertWritesEnabled();
+    requirePositiveId(id, 'ID do registro');
+    const resource = this.#getResource(itemType);
+    if (!resource.updateFields) {
+      throw new GlpiApiError('Gravações não implementadas para este tipo de registro.');
+    }
+
+    const fields = this.#pickWritableFields(itemType, input, 'updateFields');
+    return this.#serializeWrite(async () => {
+      const payload = await this.#request(`${itemType}/${id}?session_write=true`, {
+        method: 'PUT',
+        body: { input: { id, ...fields } },
+      });
+      if (!isUpdateConfirmed(payload, id)) {
+        throw new GlpiApiError('O GLPI não confirmou a atualização. Consulte o registro antes de repetir a operação.');
+      }
+
+      const recordParentId = resource.parentType ? parentId : undefined;
+      const url = resource.parentType
+        ? this.recordUrl(resource.parentType, recordParentId)
+        : this.recordUrl(itemType, id);
+      return {
+        id,
+        ...(recordParentId ? { parentId: recordParentId } : {}),
+        url,
+      };
+    });
+  }
+
+  #serializeWrite(operation) {
+    const result = this.#writeQueue.then(operation);
+    this.#writeQueue = result.catch(() => undefined);
+    return result;
   }
 
   async #getSession() {
@@ -293,8 +443,12 @@ export class GlpiClient {
     return resource;
   }
 
-  async #send(path, extraHeaders) {
-    const headers = { Accept: 'application/json', ...extraHeaders };
+  async #send(path, extraHeaders = {}, { method = 'GET', body } = {}) {
+    const headers = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...extraHeaders,
+    };
     if (this.#config.appToken) {
       headers['App-Token'] = this.#config.appToken;
     }
@@ -302,12 +456,18 @@ export class GlpiClient {
     let response;
     try {
       response = await this.#fetch(this.#endpoint(path), {
-        method: 'GET',
+        method,
         headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         redirect: 'error',
       });
     } catch (error) {
+      if (method !== 'GET') {
+        throw new GlpiApiError(
+          'Não foi possível confirmar o resultado da gravação. Consulte o GLPI antes de repetir a operação.',
+        );
+      }
       if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
         throw new GlpiApiError('A conexão com o GLPI excedeu o tempo limite.');
       }
@@ -331,7 +491,13 @@ export class GlpiClient {
     }
   }
 
-  #messageForStatus(status) {
+  #messageForStatus(status, isWrite = false) {
+    if (isWrite && ![400, 401, 403, 404, 405, 409, 422].includes(status)) {
+      return 'Não foi possível confirmar o resultado da gravação. Consulte o GLPI antes de repetir a operação.';
+    }
+    if (status === 400 && isWrite) {
+      return 'O GLPI recusou os campos enviados. Confira os valores e os campos permitidos.';
+    }
     if (status === 400 || status === 401) {
       return 'O GLPI recusou a autenticação. Confira a URL e os tokens no arquivo local.';
     }
@@ -343,6 +509,23 @@ export class GlpiClient {
     }
     return `O GLPI respondeu com HTTP ${status}.`;
   }
+}
+
+function requireText(value, message) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new GlpiApiError(message);
+  }
+}
+
+function requirePositiveId(value, label) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new GlpiApiError(`${label} precisa ser um inteiro positivo.`);
+  }
+}
+
+function isUpdateConfirmed(payload, id) {
+  const rows = Array.isArray(payload) ? payload : [payload];
+  return rows.some((row) => row && typeof row === 'object' && row[String(id)] === true);
 }
 
 async function mapWithConcurrency(items, concurrency, mapper) {
