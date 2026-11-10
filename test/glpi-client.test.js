@@ -318,7 +318,7 @@ test('lista tarefas de projeto e devolve campos de prazo, estado e progresso', a
   assert.equal(result.tasks[0].percent_done, 45);
   assert.equal(result.tasks[0].projectstates_id, 2);
   assert.equal(result.tasks[0].plan_end_date, '2026-11-30');
-  assert.equal(result.tasks[0].url, 'https://glpi.exemplo.com/instancia/front/project.form.php?id=19');
+  assert.equal(result.tasks[0].url, 'https://glpi.exemplo.com/instancia/front/projecttask.form.php?id=401');
   await client.close();
 });
 
@@ -531,4 +531,214 @@ test('não declara atualização concluída quando o GLPI devolve falha no corpo
       return true;
     },
   );
+});
+
+test('lista estados de projeto com IDs e nomes e paginação limitada', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/ProjectState/?range=10-19')) {
+      return jsonResponse({
+        totalcount: 12,
+        data: [{ id: 11, name: 'Em andamento' }, { id: 12, name: 'Concluído', color: '#fff' }],
+      }, 206);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  const result = await client.listProjectStates({ offset: 10, limit: 10 });
+  assert.deepEqual(result, {
+    totalCount: 12,
+    results: [{ id: 11, name: 'Em andamento' }, { id: 12, name: 'Concluído' }],
+  });
+  assert.ok(requests.some(({ url }) => url.endsWith('/ProjectState/?range=10-19')));
+  await client.close();
+});
+
+test('cria e atualiza projeto com campos permitidos e link do projeto', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/Project/?session_write=true') && options.method === 'POST') {
+      return jsonResponse({ id: 510, message: 'criado' }, 201);
+    }
+    if (url.endsWith('/Project/510?session_write=true') && options.method === 'PUT') {
+      return jsonResponse([{ 510: true, message: '' }]);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  const created = await client.createProject({
+    name: 'Projeto de teste',
+    content: 'Descrição',
+    projectstates_id: 2,
+    priority: 3,
+    percent_done: 20,
+    plan_start_date: '2026-11-10',
+    plan_end_date: '2026-12-01',
+    entities_id: 999,
+    users_id: 999,
+  });
+  const updated = await client.updateProject(510, { percent_done: 50, projectstates_id: 3 });
+
+  assert.deepEqual(created, {
+    id: 510,
+    url: 'https://glpi.exemplo.com/instancia/front/project.form.php?id=510',
+  });
+  assert.deepEqual(updated, created);
+  const createRequest = requests.find(({ method }) => method === 'POST');
+  assert.deepEqual(JSON.parse(createRequest.body), {
+    input: {
+      name: 'Projeto de teste',
+      content: 'Descrição',
+      projectstates_id: 2,
+      priority: 3,
+      percent_done: 20,
+      plan_start_date: '2026-11-10',
+      plan_end_date: '2026-12-01',
+    },
+  });
+  await client.close();
+});
+
+test('cria tarefa de projeto com projeto de destino, estado manual e link do projeto', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/ProjectTask/?session_write=true') && options.method === 'POST') {
+      return jsonResponse({ id: 611, message: 'criada' }, 201);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  const result = await client.createProjectTask(510, {
+    name: 'Tarefa de projeto',
+    content: 'Preparar entrega',
+    projectstates_id: 2,
+    percent_done: 25,
+    plan_end_date: '2026-12-15',
+    users_id: 999,
+  });
+
+  assert.deepEqual(result, {
+    id: 611,
+    parentId: 510,
+    url: 'https://glpi.exemplo.com/instancia/front/projecttask.form.php?id=611',
+  });
+  const createRequest = requests.find(({ method }) => method === 'POST');
+  assert.deepEqual(JSON.parse(createRequest.body), {
+    input: {
+      name: 'Tarefa de projeto',
+      content: 'Preparar entrega',
+      projectstates_id: 2,
+      percent_done: 25,
+      plan_end_date: '2026-12-15',
+      auto_projectstates: false,
+      projects_id: 510,
+    },
+  });
+  await client.close();
+});
+
+test('verifica projeto e estado automático antes da atualização manual de tarefa de projeto', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/ProjectTask/611')) {
+      return jsonResponse({ id: 611, projects_id: 510, projectstates_id: 2, auto_projectstates: '1' });
+    }
+    if (url.endsWith('/ProjectTask/611?session_write=true') && options.method === 'PUT') {
+      return jsonResponse([{ 611: true, message: '' }]);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  await assert.rejects(
+    client.updateProjectTask(510, 611, { projectstates_id: 3 }),
+    /estado automático/u,
+  );
+  assert.equal(requests.some(({ method }) => method === 'PUT'), false);
+
+  const result = await client.updateProjectTask(510, 611, {
+    projectstates_id: 3,
+    auto_projectstates: false,
+    percent_done: 50,
+    plan_end_date: '2026-12-20',
+  });
+  assert.deepEqual(result, {
+    id: 611,
+    parentId: 510,
+    url: 'https://glpi.exemplo.com/instancia/front/projecttask.form.php?id=611',
+  });
+  const updateRequest = requests.find(({ method }) => method === 'PUT');
+  assert.deepEqual(JSON.parse(updateRequest.body), {
+    input: {
+      id: 611,
+      projectstates_id: 3,
+      auto_projectstates: false,
+      percent_done: 50,
+      plan_end_date: '2026-12-20',
+    },
+  });
+  await client.close();
+});
+
+test('recusa progresso inválido, datas invertidas e datas impossíveis antes da gravação', async () => {
+  let requestCount = 0;
+  const client = new GlpiClient(writeConfig, async () => {
+    requestCount += 1;
+    return jsonResponse({ session_token: 'sessao-ficticia' });
+  });
+
+  await assert.rejects(
+    client.createProjectTask(510, {
+      name: 'Tarefa inválida',
+      percent_done: 101,
+    }),
+    /progresso precisa ser/u,
+  );
+  await assert.rejects(
+    client.createProjectTask(510, {
+      name: 'Tarefa inválida',
+      plan_start_date: '2026-12-20',
+      plan_end_date: '2026-12-10',
+    }),
+    /prazo planejado não pode ser anterior/u,
+  );
+  await assert.rejects(
+    client.createProjectTask(510, {
+      name: 'Tarefa inválida',
+      plan_start_date: '2026-02-30',
+    }),
+    /formato AAAA-MM-DD/u,
+  );
+  assert.equal(requestCount, 0);
 });

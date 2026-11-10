@@ -40,6 +40,14 @@ const RESOURCE_MAP = Object.freeze({
       'id', 'name', 'content', 'projectstates_id', 'priority', 'percent_done',
       'plan_start_date', 'plan_end_date', 'entities_id', 'users_id', 'date', 'date_mod',
     ],
+    createFields: [
+      'name', 'content', 'projectstates_id', 'priority', 'percent_done',
+      'plan_start_date', 'plan_end_date',
+    ],
+    updateFields: [
+      'name', 'content', 'projectstates_id', 'priority', 'percent_done',
+      'plan_start_date', 'plan_end_date',
+    ],
   },
   TicketTask: {
     parentType: 'Ticket',
@@ -54,10 +62,19 @@ const RESOURCE_MAP = Object.freeze({
   ProjectTask: {
     parentType: 'Project',
     parentForeignKey: 'projects_id',
+    form: 'projecttask.form.php',
     detailFields: [
       'id', 'projects_id', 'projecttasks_id', 'name', 'content', 'projectstates_id',
       'percent_done', 'plan_start_date', 'plan_end_date', 'is_milestone', 'users_id',
-      'date', 'date_mod',
+      'auto_projectstates', 'date', 'date_mod',
+    ],
+    createFields: [
+      'name', 'content', 'projectstates_id', 'percent_done', 'plan_start_date',
+      'plan_end_date', 'auto_projectstates',
+    ],
+    updateFields: [
+      'name', 'content', 'projectstates_id', 'percent_done', 'plan_start_date',
+      'plan_end_date', 'auto_projectstates',
     ],
   },
 });
@@ -163,7 +180,7 @@ export class GlpiClient {
       id: Number(record.id ?? id),
       url: resource.parentType
         ? Number.isSafeInteger(parentId) && parentId > 0
-          ? this.recordUrl(resource.parentType, parentId)
+          ? this.#itemUrl(itemType, Number(record.id ?? id), parentId)
           : null
         : this.recordUrl(itemType, id),
     };
@@ -242,6 +259,76 @@ export class GlpiClient {
     }
 
     return this.#updateItem('TicketTask', taskId, fields, ticketId);
+  }
+
+  async listProjectStates({ offset, limit }) {
+    const end = offset + limit - 1;
+    const payload = await this.#request(`ProjectState/?range=${offset}-${end}`);
+    const rawRows = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.data)
+        ? payload.data
+        : Object.values(payload?.data ?? payload ?? {});
+    const states = rawRows
+      .filter((row) => row && typeof row === 'object')
+      .map((row) => ({ id: Number(row.id), name: row.name }))
+      .filter((row) => Number.isSafeInteger(row.id) && row.id > 0 && typeof row.name === 'string');
+
+    return {
+      totalCount: Number(payload?.totalcount ?? states.length),
+      results: states,
+    };
+  }
+
+  async createProject(input) {
+    const fields = this.#pickWritableFields('Project', input, 'createFields');
+    requireText(fields.name, 'O projeto precisa de um nome.');
+    validateProjectFields(fields);
+    return this.#createItem('Project', fields);
+  }
+
+  async updateProject(id, input) {
+    const fields = this.#pickWritableFields('Project', input, 'updateFields');
+    validateProjectFields(fields);
+    return this.#updateItem('Project', id, fields);
+  }
+
+  async createProjectTask(projectId, input) {
+    this.#assertWritesEnabled();
+    requirePositiveId(projectId, 'ID do projeto');
+    const fields = this.#pickWritableFields('ProjectTask', input, 'createFields');
+    requireText(fields.name, 'A tarefa de projeto precisa de um nome.');
+    validateProjectFields(fields, { task: true });
+    if (fields.projectstates_id !== undefined) {
+      if (fields.auto_projectstates === true) {
+        throw new GlpiApiError('Defina auto_projectstates=false para gravar um estado manual.');
+      }
+      if (fields.auto_projectstates === undefined) {
+        fields.auto_projectstates = false;
+      }
+    }
+    return this.#createItem('ProjectTask', { ...fields, projects_id: projectId }, projectId);
+  }
+
+  async updateProjectTask(projectId, taskId, input) {
+    this.#assertWritesEnabled();
+    requirePositiveId(projectId, 'ID do projeto');
+    requirePositiveId(taskId, 'ID da tarefa');
+    const fields = this.#pickWritableFields('ProjectTask', input, 'updateFields');
+    validateProjectFields(fields, { task: true });
+    const task = await this.getItem('ProjectTask', taskId);
+    if (Number(task.projects_id) !== projectId) {
+      throw new GlpiApiError('A tarefa não pertence ao projeto informado.');
+    }
+    if (fields.projectstates_id !== undefined) {
+      if (fields.auto_projectstates === true) {
+        throw new GlpiApiError('Desative auto_projectstates para definir o estado manualmente.');
+      }
+      if (isGlpiFlagEnabled(task.auto_projectstates) && fields.auto_projectstates !== false) {
+        throw new GlpiApiError('A tarefa usa estado automático. Envie auto_projectstates=false para definir um estado manual, ou altere somente o progresso.');
+      }
+    }
+    return this.#updateItem('ProjectTask', taskId, fields, projectId);
   }
 
   recordUrl(itemType, id) {
@@ -340,9 +427,7 @@ export class GlpiClient {
 
       const resource = this.#getResource(itemType);
       const recordParentId = resource.parentType ? parentId : undefined;
-      const url = resource.parentType
-        ? this.recordUrl(resource.parentType, recordParentId)
-        : this.recordUrl(itemType, id);
+      const url = this.#itemUrl(itemType, id, recordParentId);
       return {
         id,
         ...(recordParentId ? { parentId: recordParentId } : {}),
@@ -370,9 +455,7 @@ export class GlpiClient {
       }
 
       const recordParentId = resource.parentType ? parentId : undefined;
-      const url = resource.parentType
-        ? this.recordUrl(resource.parentType, recordParentId)
-        : this.recordUrl(itemType, id);
+      const url = this.#itemUrl(itemType, id, recordParentId);
       return {
         id,
         ...(recordParentId ? { parentId: recordParentId } : {}),
@@ -385,6 +468,19 @@ export class GlpiClient {
     const result = this.#writeQueue.then(operation);
     this.#writeQueue = result.catch(() => undefined);
     return result;
+  }
+
+  #itemUrl(itemType, id, parentId) {
+    const resource = this.#getResource(itemType);
+    if (resource.form) {
+      return this.recordUrl(itemType, id);
+    }
+    if (resource.parentType) {
+      return Number.isSafeInteger(parentId) && parentId > 0
+        ? this.recordUrl(resource.parentType, parentId)
+        : null;
+    }
+    return this.recordUrl(itemType, id);
   }
 
   async #getSession() {
@@ -521,6 +617,45 @@ function requirePositiveId(value, label) {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new GlpiApiError(`${label} precisa ser um inteiro positivo.`);
   }
+}
+
+function validateProjectFields(fields, { task = false } = {}) {
+  if (fields.projectstates_id !== undefined) {
+    requirePositiveId(fields.projectstates_id, 'ID do estado');
+  }
+  if (fields.priority !== undefined && (!Number.isInteger(fields.priority) || fields.priority < 1 || fields.priority > 6)) {
+    throw new GlpiApiError('A prioridade precisa ser um inteiro entre 1 e 6.');
+  }
+  if (fields.percent_done !== undefined && (!Number.isInteger(fields.percent_done) || fields.percent_done < 0 || fields.percent_done > 100)) {
+    throw new GlpiApiError('O progresso precisa ser um inteiro entre 0 e 100.');
+  }
+  for (const field of ['plan_start_date', 'plan_end_date']) {
+    if (fields[field] !== undefined && !isValidDateOnly(fields[field])) {
+      throw new GlpiApiError('As datas planejadas precisam usar o formato AAAA-MM-DD.');
+    }
+  }
+  if (
+    fields.plan_start_date !== undefined
+    && fields.plan_end_date !== undefined
+    && fields.plan_end_date < fields.plan_start_date
+  ) {
+    throw new GlpiApiError('O prazo planejado não pode ser anterior à data de início.');
+  }
+  if (task && fields.auto_projectstates !== undefined && typeof fields.auto_projectstates !== 'boolean') {
+    throw new GlpiApiError('auto_projectstates precisa ser true ou false.');
+  }
+}
+
+function isValidDateOnly(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
+    return false;
+  }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
+}
+
+function isGlpiFlagEnabled(value) {
+  return value === true || value === 1 || value === '1';
 }
 
 function isUpdateConfirmed(payload, id) {

@@ -1,6 +1,6 @@
 # MCP local do GLPI
 
-Servidor MCP local para Claude Desktop. O servidor inclui um cliente compartilhado, configuração por arquivo e ferramentas de leitura e gravação para chamados e tarefas de chamado, além de leitura de projetos e tarefas de projeto.
+Servidor MCP local para Claude Desktop. O servidor inclui um cliente compartilhado, configuração por arquivo e ferramentas de leitura e gravação para chamados, tarefas de chamado, projetos e tarefas de projeto.
 
 ## Requisitos
 
@@ -32,8 +32,11 @@ O servidor usa o transporte MCP `stdio`. No Claude Desktop, o comando local de d
 - `consultar_chamado` e `consultar_projeto` consultam um registro pelo ID.
 - `listar_tarefas_chamado` exige `ticket_id` e lista somente as tarefas que a conta pode consultar.
 - `listar_tarefas_projeto` exige `project_id` e retorna as tarefas com prazo, estado e progresso.
+- `listar_estados_projeto` retorna IDs e nomes dos estados disponíveis para usar nas gravações de projeto.
 - `abrir_chamado` e `atualizar_chamado` criam ou atualizam campos selecionados de chamados.
 - `criar_tarefa_chamado` e `atualizar_tarefa_chamado` gravam tarefas vinculadas ao chamado indicado por ID; são ferramentas distintas das tarefas de projeto.
+- `criar_projeto` e `atualizar_projeto` criam ou atualizam projetos.
+- `criar_tarefa_projeto` e `atualizar_tarefa_projeto` gravam tarefas vinculadas ao projeto indicado por ID, com estado, prazo e progresso.
 
 As ferramentas de listagem de tarefas aceitam `limit` entre 1 e 50 e `offset` para paginação.
 
@@ -41,4 +44,4 @@ As ferramentas respeitam o perfil e a entidade ativos da conta GLPI. As buscas s
 
 O servidor mantém o token de sessão em memória, tenta renová-lo uma vez após uma resposta HTTP 401 e encerra a sessão ao desligar. As respostas de erro não incluem tokens nem mensagens brutas devolvidas pela API.
 
-As gravações usam a API legada com `session_write=true` e respeitam as permissões GLPI da conta configurada. A implementação de gravações de chamados e tarefas foi validada com respostas simuladas; não foi testada contra uma instância de homologação. Em caso de timeout ou resposta parcial, consulte o GLPI antes de repetir a operação para evitar duplicidade. Cada ferramenta de gravação pede confirmação explícita no fluxo do Claude.
+As gravações usam a API legada com `session_write=true` e respeitam as permissões GLPI da conta configurada. Todos os fluxos de gravação foram implementados com allowlist de campos e respostas simuladas; não foram testados contra uma instância de homologação. Para alterar manualmente o estado de uma tarefa de projeto com `auto_projectstates=true`, envie `auto_projectstates=false`; caso contrário, o GLPI calcula o estado pelo progresso. Em caso de timeout ou resposta parcial, consulte o GLPI antes de repetir a operação para evitar duplicidade. Cada ferramenta de gravação pede confirmação explícita no fluxo do Claude.

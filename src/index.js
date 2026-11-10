@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 const server = new McpServer({
   name: 'mcp-glpi-local',
-  version: '0.2.0',
+  version: '0.3.0',
 });
 
 let clientPromise;
@@ -104,6 +104,33 @@ function registerTaskListTool(name, title, parentIdField, parentType, childType,
   );
 }
 
+function registerProjectStatesTool() {
+  server.registerTool(
+    'listar_estados_projeto',
+    {
+      title: 'Listar estados de projeto',
+      description: 'Lista IDs e nomes dos estados de projeto disponíveis na instância. Use os IDs ao criar ou atualizar projetos e tarefas de projeto; se nomes forem iguais, apresente as opções e aguarde a escolha explícita.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(50).default(50).describe('Quantidade máxima de estados.'),
+        offset: z.number().int().min(0).max(1_000_000).default(0).describe('Deslocamento para paginação, começando em zero.'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ limit, offset }) => {
+      try {
+        const client = await getClient();
+        const result = await client.listProjectStates({ limit, offset });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+          structuredContent: result,
+        };
+      } catch (error) {
+        return { content: [{ type: 'text', text: toolError(error) }], isError: true };
+      }
+    },
+  );
+}
+
 function registerMutationTool(name, title, description, inputSchema, handler) {
   server.registerTool(
     name,
@@ -146,6 +173,25 @@ const ticketTaskFields = {
   is_private: z.boolean().optional().describe('Define se a tarefa é privada. A API aplica as permissões da conta.'),
   actiontime: z.number().int().min(0).max(2_147_483_647).optional().describe('Tempo registrado em segundos.'),
   taskcategories_id: z.number().int().positive().optional().describe('ID da categoria da tarefa, se conhecida.'),
+};
+const projectDate = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/u, 'Use AAAA-MM-DD.');
+const projectFields = {
+  name: z.string().trim().min(1).max(255).optional().describe('Nome do projeto ou da tarefa.'),
+  content: z.string().trim().max(10_000).optional().describe('Descrição.'),
+  projectstates_id: z.number().int().positive().optional().describe('ID do estado, consultado em listar_estados_projeto.'),
+  priority: z.number().int().min(1).max(6).optional().describe('Prioridade GLPI de 1 a 6.'),
+  percent_done: z.number().int().min(0).max(100).optional().describe('Progresso de 0 a 100 por cento.'),
+  plan_start_date: projectDate.optional().describe('Data planejada de início, AAAA-MM-DD.'),
+  plan_end_date: projectDate.optional().describe('Prazo planejado, AAAA-MM-DD.'),
+};
+const projectTaskFields = {
+  name: projectFields.name,
+  content: projectFields.content,
+  projectstates_id: projectFields.projectstates_id,
+  percent_done: projectFields.percent_done,
+  plan_start_date: projectFields.plan_start_date,
+  plan_end_date: projectFields.plan_end_date,
+  auto_projectstates: z.boolean().optional().describe('Quando true, o GLPI calcula o estado a partir do progresso. Para gravar um estado manual, use false.'),
 };
 
 async function getClient() {
@@ -219,6 +265,7 @@ registerTaskListTool(
   'ProjectTask',
   'Lista tarefas de um projeto pelo ID e retorna prazo, estado e progresso disponíveis para a conta GLPI.',
 );
+registerProjectStatesTool();
 
 registerMutationTool(
   'abrir_chamado',
@@ -273,6 +320,62 @@ registerMutationTool(
     ...ticketTaskFields,
   },
   (client, { ticket_id, task_id, ...input }) => client.updateTicketTask(ticket_id, task_id, input),
+);
+
+registerMutationTool(
+  'criar_projeto',
+  'Criar projeto',
+  'Cria um projeto executando como a conta GLPI configurada. O GLPI aplica o perfil e a entidade ativa; a ferramenta não permite informar outro usuário ou entidade. Use listar_estados_projeto para escolher projectstates_id. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  {
+    name: projectFields.name.unwrap(),
+    content: projectFields.content,
+    projectstates_id: projectFields.projectstates_id,
+    priority: projectFields.priority,
+    percent_done: projectFields.percent_done,
+    plan_start_date: projectFields.plan_start_date,
+    plan_end_date: projectFields.plan_end_date,
+  },
+  (client, input) => client.createProject(input),
+);
+
+registerMutationTool(
+  'atualizar_projeto',
+  'Atualizar projeto',
+  'Atualiza nome, descrição, estado, prioridade, progresso ou datas planejadas do projeto indicado pelo ID. Se a busca por nome retornar mais de um projeto com o mesmo nome, apresente as opções e aguarde a escolha explícita antes de gravar. Use listar_estados_projeto para selecionar o ID do estado. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  {
+    id: z.number().int().positive().describe('ID do projeto.'),
+    ...projectFields,
+  },
+  (client, { id, ...input }) => client.updateProject(id, input),
+);
+
+registerMutationTool(
+  'criar_tarefa_projeto',
+  'Criar tarefa de projeto',
+  'Cria uma tarefa vinculada ao projeto indicado por project_id. Não use para tarefas de chamado. Se o nome do projeto tiver resultados repetidos, apresente as opções e aguarde a escolha explícita. Use listar_estados_projeto para escolher projectstates_id. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  {
+    project_id: z.number().int().positive().describe('ID do projeto de destino.'),
+    name: projectFields.name.unwrap(),
+    content: projectFields.content,
+    projectstates_id: projectFields.projectstates_id,
+    percent_done: projectFields.percent_done,
+    plan_start_date: projectFields.plan_start_date,
+    plan_end_date: projectFields.plan_end_date,
+    auto_projectstates: projectTaskFields.auto_projectstates,
+  },
+  (client, { project_id, ...input }) => client.createProjectTask(project_id, input),
+);
+
+registerMutationTool(
+  'atualizar_tarefa_projeto',
+  'Atualizar tarefa de projeto',
+  'Atualiza uma tarefa identificada por project_id e task_id. O servidor confere que a tarefa pertence ao projeto antes da gravação. Permite alterar estado, prazo, datas, progresso, nome e descrição. Quando o estado automático estiver ativo, informe auto_projectstates=false para gravar um estado manual; alterar somente o progresso mantém a regra automática do GLPI. Não use para tarefas de chamado. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  {
+    project_id: z.number().int().positive().describe('ID do projeto ao qual a tarefa pertence.'),
+    task_id: z.number().int().positive().describe('ID da tarefa de projeto.'),
+    ...projectTaskFields,
+  },
+  (client, { project_id, task_id, ...input }) => client.updateProjectTask(project_id, task_id, input),
 );
 
 const transport = new StdioServerTransport();
