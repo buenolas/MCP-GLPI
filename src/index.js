@@ -201,7 +201,7 @@ async function getClient() {
 function createServer() {
   const server = new McpServer({
     name: 'mcp-glpi-local',
-    version: '0.3.1',
+    version: '0.3.2',
   });
 
   server.registerTool(

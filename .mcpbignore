@@ -13,4 +13,3 @@ node_modules/.package-lock.json
 test/
 scripts/
 coverage/
-dist/
