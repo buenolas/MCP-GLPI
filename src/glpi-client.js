@@ -1,4 +1,12 @@
 const REQUEST_TIMEOUT_MS = 15_000;
+const GLPI_CREATE_RIGHT = 4;
+const PUBLIC_WRITE_ERROR_CODES = new Set([
+  'ERROR_GLPI_ADD',
+  'ERROR_GLPI_UPDATE',
+  'ERROR_RIGHT_MISSING',
+  'ERROR_BAD_ARRAY',
+  'ERROR_JSON_PAYLOAD_INVALID',
+]);
 
 const RESOURCE_MAP = Object.freeze({
   Ticket: {
@@ -9,6 +17,7 @@ const RESOURCE_MAP = Object.freeze({
       name: ['glpi_tickets', 'name'],
       status: ['glpi_tickets', 'status'],
       priority: ['glpi_tickets', 'priority'],
+      openedAt: ['glpi_tickets', 'date'],
     },
     detailFields: [
       'id', 'name', 'content', 'status', 'priority', 'date', 'date_mod',
@@ -37,15 +46,15 @@ const RESOURCE_MAP = Object.freeze({
       planEndDate: ['glpi_projects', 'plan_end_date'],
     },
     detailFields: [
-      'id', 'name', 'content', 'projectstates_id', 'priority', 'percent_done',
+      'id', 'projects_id', 'name', 'content', 'projectstates_id', 'priority', 'percent_done',
       'plan_start_date', 'plan_end_date', 'entities_id', 'users_id', 'date', 'date_mod',
     ],
     createFields: [
-      'name', 'content', 'projectstates_id', 'priority', 'percent_done',
+      'projects_id', 'name', 'content', 'projectstates_id', 'priority', 'percent_done',
       'plan_start_date', 'plan_end_date',
     ],
     updateFields: [
-      'name', 'content', 'projectstates_id', 'priority', 'percent_done',
+      'projects_id', 'name', 'content', 'projectstates_id', 'priority', 'percent_done',
       'plan_start_date', 'plan_end_date',
     ],
   },
@@ -115,11 +124,16 @@ export class GlpiClient {
       .map((part) => part.trim())
       .join(' ');
     const activeProfile = profile?.active_profile ?? profile;
+    const ticketRights = activeProfile?.ticket;
     const activeEntity = entityState?.active_entity;
     return {
       status: 'connected',
       userId: Number.isSafeInteger(userId) && userId > 0 ? userId : null,
       userName: fullName || session?.glpiname || null,
+      writesEnabled: this.#config.writesEnabled === true,
+      canCreateTickets: /^\d+$/u.test(String(ticketRights))
+        ? (Number(ticketRights) & GLPI_CREATE_RIGHT) !== 0
+        : null,
       activeProfile: {
         id: activeProfile?.id ?? null,
         name: activeProfile?.name ?? null,
@@ -147,11 +161,21 @@ export class GlpiClient {
     }
 
     const params = new URLSearchParams();
-    params.set('criteria[0][link]', 'AND');
-    params.set('criteria[0][itemtype]', itemType);
-    params.set('criteria[0][field]', nameField);
-    params.set('criteria[0][searchtype]', 'contains');
-    params.set('criteria[0][value]', query);
+    if (query) {
+      params.set('criteria[0][link]', 'AND');
+      params.set('criteria[0][field]', nameField);
+      params.set('criteria[0][searchtype]', 'contains');
+      params.set('criteria[0][value]', query);
+    } else if (itemType === 'Ticket') {
+      const openedAtField = fields.find(([name]) => name === 'openedAt')?.[1];
+      if (!openedAtField) {
+        throw new GlpiApiError('A API do GLPI não disponibilizou a data de abertura para ordenar os chamados.');
+      }
+      params.set('sort', openedAtField);
+      params.set('order', 'DESC');
+    } else {
+      throw new GlpiApiError('Informe um termo para buscar projetos.');
+    }
     params.set('range', `${offset}-${offset + limit - 1}`);
 
     const displayFields = fields.map(([, optionId]) => optionId);
@@ -184,6 +208,9 @@ export class GlpiClient {
         .filter((field) => Object.hasOwn(payload ?? {}, field))
         .map((field) => [field, payload[field]]),
     );
+    if (itemType === 'Project' && Object.hasOwn(record, 'projects_id')) {
+      record.parentProjectId = Number(record.projects_id ?? 0);
+    }
 
     const parentId = resource.parentType ? Number(record[resource.parentForeignKey]) : undefined;
     return {
@@ -292,16 +319,69 @@ export class GlpiClient {
   }
 
   async createProject(input) {
-    const fields = this.#pickWritableFields('Project', input, 'createFields');
+    const { parent_project_id: parentProjectId, ...projectInput } = input ?? {};
+    if (Object.hasOwn(projectInput, 'projects_id')) {
+      throw new GlpiApiError('Use parent_project_id para informar o projeto-pai.');
+    }
+    if (parentProjectId !== undefined) {
+      requirePositiveId(parentProjectId, 'ID do projeto-pai');
+      projectInput.projects_id = parentProjectId;
+    }
+    const fields = this.#pickWritableFields('Project', projectInput, 'createFields');
     requireText(fields.name, 'O projeto precisa de um nome.');
     validateProjectFields(fields);
+    if (parentProjectId !== undefined) {
+      await this.#assertProjectParent(parentProjectId);
+    }
     return this.#createItem('Project', fields);
   }
 
   async updateProject(id, input) {
-    const fields = this.#pickWritableFields('Project', input, 'updateFields');
+    requirePositiveId(id, 'ID do projeto');
+    const { parent_project_id: parentProjectId, ...projectInput } = input ?? {};
+    if (Object.hasOwn(projectInput, 'projects_id')) {
+      throw new GlpiApiError('Use parent_project_id para informar o projeto-pai.');
+    }
+    if (parentProjectId !== undefined) {
+      if (!Number.isSafeInteger(parentProjectId) || parentProjectId < 0) {
+        throw new GlpiApiError('ID do projeto-pai precisa ser um inteiro positivo ou 0 para remover o vínculo.');
+      }
+      projectInput.projects_id = parentProjectId;
+    }
+    const fields = this.#pickWritableFields('Project', projectInput, 'updateFields');
+    if (parentProjectId > 0) {
+      await this.#assertProjectParent(parentProjectId, id);
+    }
     validateProjectFields(fields);
     return this.#updateItem('Project', id, fields);
+  }
+
+  async #assertProjectParent(parentProjectId, projectId) {
+    const visited = new Set();
+    let currentId = parentProjectId;
+
+    while (currentId > 0) {
+      if (currentId === projectId) {
+        throw new GlpiApiError('O projeto não pode ser pai de si mesmo nem de um dos seus ancestrais.');
+      }
+      if (visited.has(currentId)) {
+        throw new GlpiApiError('A hierarquia atual do projeto contém um ciclo e não pode ser alterada com segurança.');
+      }
+      if (visited.size >= 100) {
+        throw new GlpiApiError('A hierarquia do projeto excede o limite de segurança para validação.');
+      }
+      visited.add(currentId);
+
+      const parent = await this.getItem('Project', currentId);
+      if (!Object.hasOwn(parent, 'projects_id')) {
+        throw new GlpiApiError('O GLPI não retornou o projeto-pai da hierarquia; a gravação foi interrompida.');
+      }
+      const nextId = parent.projects_id == null || parent.projects_id === '' ? 0 : Number(parent.projects_id);
+      if (!Number.isSafeInteger(nextId) || nextId < 0) {
+        throw new GlpiApiError('O GLPI retornou um vínculo de projeto-pai inválido; a gravação foi interrompida.');
+      }
+      currentId = nextId;
+    }
   }
 
   async createProjectTask(projectId, input) {
@@ -380,7 +460,20 @@ export class GlpiClient {
     }
 
     if (!response.ok) {
-      throw new GlpiApiError(this.#messageForStatus(response.status, method !== 'GET'), response.status);
+      const isWrite = method !== 'GET';
+      if (isWrite) {
+        const payload = await response.json().catch(() => null);
+        const code = Array.isArray(payload) && PUBLIC_WRITE_ERROR_CODES.has(payload[0])
+          ? payload[0]
+          : null;
+        const detail = code ? `HTTP ${response.status}, ${code}` : `HTTP ${response.status}`;
+        console.error(`[MCP GLPI] Erro de gravação (${detail}).`);
+        if (code === 'ERROR_RIGHT_MISSING') {
+          throw new GlpiApiError(`O GLPI recusou a gravação por falta de permissão (${detail}).`, response.status);
+        }
+        throw new GlpiApiError(`${this.#messageForStatus(response.status, true)} (${detail})`, response.status);
+      }
+      throw new GlpiApiError(this.#messageForStatus(response.status), response.status);
     }
 
     try {
@@ -603,7 +696,7 @@ export class GlpiClient {
       return 'Não foi possível confirmar o resultado da gravação. Consulte o GLPI antes de repetir a operação.';
     }
     if (status === 400 && isWrite) {
-      return 'O GLPI recusou os campos enviados. Confira os valores e os campos permitidos.';
+      return 'O GLPI recusou a gravação. Confira as permissões do perfil e as regras do formulário.';
     }
     if (status === 400 || status === 401) {
       return 'O GLPI recusou a autenticação. Confira a URL e os tokens no arquivo local.';

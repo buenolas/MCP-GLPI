@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "mcp-glpi-local",
   "display_name": "MCP do GLPI",
-  "version": "0.3.3",
+  "version": "0.3.6",
   "description": "Conecta o Claude Desktop ao GLPI usando as permissões da conta local.",
-  "long_description": "Servidor MCP local para consultar e atualizar chamados, tarefas de chamado, projetos e tarefas de projeto. A extensão lê um arquivo de configuração .txt selecionado durante a instalação. Os tokens permanecem nesse arquivo local, e as gravações ficam desabilitadas por padrão.",
+  "long_description": "Servidor MCP local para consultar e atualizar chamados, tarefas de chamado, projetos e tarefas de projeto, incluindo a hierarquia de projetos. A extensão lê um arquivo de configuração .txt selecionado durante a instalação. Os tokens permanecem nesse arquivo local, e as gravações ficam desabilitadas por padrão.",
   "author": {
     "name": "Equipe MCP GLPI"
   },
@@ -48,7 +48,7 @@
   },
   "tools": [
     { "name": "diagnosticar_conexao", "description": "Mostra o nome e o ID do usuário autenticado, do perfil ativo e da entidade ativa." },
-    { "name": "buscar_chamados", "description": "Busca chamados respeitando as permissões da conta." },
+    { "name": "buscar_chamados", "description": "Busca chamados pelo título ou lista os mais recentes sem termo de busca." },
     { "name": "consultar_chamado", "description": "Consulta um chamado pelo ID." },
     { "name": "listar_tarefas_chamado", "description": "Lista tarefas visíveis de um chamado, incluindo privadas quando permitidas." },
     { "name": "buscar_projetos", "description": "Busca projetos respeitando as permissões da conta." },
@@ -59,8 +59,8 @@
     { "name": "atualizar_chamado", "description": "Atualiza campos selecionados de um chamado." },
     { "name": "criar_tarefa_chamado", "description": "Cria uma tarefa vinculada ao chamado indicado." },
     { "name": "atualizar_tarefa_chamado", "description": "Atualiza uma tarefa pertencente ao chamado indicado." },
-    { "name": "criar_projeto", "description": "Cria um projeto quando gravações estão habilitadas." },
-    { "name": "atualizar_projeto", "description": "Atualiza campos selecionados de um projeto." },
+    { "name": "criar_projeto", "description": "Cria projeto e pode vinculá-lo a um projeto-pai existente." },
+    { "name": "atualizar_projeto", "description": "Atualiza campos de projeto e pode alterar ou remover o projeto-pai." },
     { "name": "criar_tarefa_projeto", "description": "Cria uma tarefa vinculada ao projeto indicado." },
     { "name": "atualizar_tarefa_projeto", "description": "Atualiza uma tarefa pertencente ao projeto indicado." }
   ]
