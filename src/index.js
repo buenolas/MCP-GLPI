@@ -15,13 +15,16 @@ function toolError(error) {
 }
 
 function registerSearchTool(server, name, title, itemType, description) {
+  const searchText = z.string().trim().min(1).max(200);
   server.registerTool(
     name,
     {
       title,
       description,
       inputSchema: z.object({
-        query: z.string().trim().min(1).max(200).describe('Texto para procurar no nome do registro.'),
+        query: itemType === 'Ticket'
+          ? searchText.optional().describe('Texto no título do chamado. Omita para listar os mais recentes por data de abertura.')
+          : searchText.describe('Texto para procurar no nome do projeto.'),
         limit: z.number().int().min(1).max(50).default(10).describe('Quantidade máxima de resultados.'),
         offset: z.number().int().min(0).max(1_000_000).default(0).describe('Deslocamento para paginação, começando em zero.'),
       }),
@@ -180,6 +183,12 @@ const projectFields = {
   plan_start_date: projectDate.optional().describe('Data planejada de início, AAAA-MM-DD.'),
   plan_end_date: projectDate.optional().describe('Prazo planejado, AAAA-MM-DD.'),
 };
+const projectParentOnCreate = z.number().int().positive().optional().describe(
+  'ID do projeto-pai existente. Consulte buscar_projetos e confirme o ID antes de criar o vínculo.',
+);
+const projectParentOnUpdate = z.number().int().nonnegative().optional().describe(
+  'ID do projeto-pai existente. Use 0 para remover o vínculo e deixar o projeto sem pai.',
+);
 const projectTaskFields = {
   name: projectFields.name,
   content: projectFields.content,
@@ -205,7 +214,7 @@ async function getClient() {
 function createServer() {
   const server = new McpServer({
     name: 'mcp-glpi-local',
-    version: '0.3.3',
+    version: '0.3.6',
   });
 
   server.registerTool(
@@ -235,7 +244,7 @@ registerSearchTool(
   'buscar_chamados',
   'Buscar chamados',
   'Ticket',
-  'Busca chamados pelo nome, respeitando o perfil e a entidade ativos da conta GLPI. Retorna paginação, status, prioridade e link.',
+  'Busca chamados pelo título. Para listar os últimos chamados, omita query. Os resultados ficam sujeitos ao perfil e à entidade ativos no GLPI.',
 );
 registerGetTool(
   server,
@@ -256,7 +265,7 @@ registerGetTool(
   'consultar_projeto',
   'Consultar projeto por ID',
   'Project',
-  'Consulta um projeto pelo ID e retorna os campos principais disponíveis para a conta GLPI.',
+  'Consulta um projeto pelo ID e retorna os campos principais disponíveis para a conta GLPI, incluindo projects_id e parentProjectId.',
 );
 registerTaskListTool(
   server,
@@ -341,9 +350,10 @@ registerMutationTool(
   server,
   'criar_projeto',
   'Criar projeto',
-  'Cria um projeto executando como a conta GLPI configurada. O GLPI aplica o perfil e a entidade ativa; a ferramenta não permite informar outro usuário ou entidade. Use listar_estados_projeto para escolher projectstates_id. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  'Cria um projeto executando como a conta GLPI configurada. Pode vincular a um projeto-pai existente usando parent_project_id; consulte buscar_projetos e confirme o ID em caso de nomes repetidos. O GLPI aplica o perfil e a entidade ativa; a ferramenta não permite informar outro usuário ou entidade. Use listar_estados_projeto para escolher projectstates_id. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
   {
     name: projectFields.name.unwrap(),
+    parent_project_id: projectParentOnCreate,
     content: projectFields.content,
     projectstates_id: projectFields.projectstates_id,
     priority: projectFields.priority,
@@ -358,10 +368,11 @@ registerMutationTool(
   server,
   'atualizar_projeto',
   'Atualizar projeto',
-  'Atualiza nome, descrição, estado, prioridade, progresso ou datas planejadas do projeto indicado pelo ID. Se a busca por nome retornar mais de um projeto com o mesmo nome, apresente as opções e aguarde a escolha explícita antes de gravar. Use listar_estados_projeto para selecionar o ID do estado. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
+  'Atualiza nome, descrição, estado, prioridade, progresso, datas planejadas ou projeto-pai do projeto indicado pelo ID. Use parent_project_id: 0 para remover o vínculo atual. Se a busca por nome retornar mais de um projeto com o mesmo nome, apresente as opções e aguarde a escolha explícita antes de gravar. Use listar_estados_projeto para selecionar o ID do estado. Requer GLPI_ENABLE_WRITES=true e confirmação explícita do usuário para esta gravação.',
   {
     id: z.number().int().positive().describe('ID do projeto.'),
     ...projectFields,
+    parent_project_id: projectParentOnUpdate,
   },
   (client, { id, ...input }) => client.updateProject(id, input),
 );

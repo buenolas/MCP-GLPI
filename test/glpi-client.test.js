@@ -24,7 +24,7 @@ test('diagnóstico abre uma sessão, consulta perfil e entidade e a reutiliza', 
       return jsonResponse({ session_token: 'sessao-ficticia' });
     }
     if (url.endsWith('/getActiveProfile')) {
-      return jsonResponse({ active_profile: { id: 3, name: 'Técnico' } });
+      return jsonResponse({ active_profile: { id: 3, name: 'Técnico', ticket: 260115 } });
     }
     if (url.endsWith('/getFullSession')) {
       return jsonResponse({ session: {
@@ -51,6 +51,8 @@ test('diagnóstico abre uma sessão, consulta perfil e entidade e a reutiliza', 
     status: 'connected',
     userId: 33,
     userName: 'Ana Silva',
+    writesEnabled: false,
+    canCreateTickets: false,
     activeProfile: { id: 3, name: 'Técnico' },
     activeEntity: { id: 8, name: 'Atendimento', recursive: true },
   });
@@ -627,6 +629,94 @@ test('cria e atualiza projeto com campos permitidos e link do projeto', async ()
       plan_end_date: '2026-12-01',
     },
   });
+  await client.close();
+});
+
+test('cria projeto filho enviando o ID do projeto-pai à API legada', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/Project/85')) {
+      return jsonResponse({ id: 85, name: 'Projeto pai', projects_id: 0, entities_id: 0 });
+    }
+    if (url.endsWith('/Project/?session_write=true') && options.method === 'POST') {
+      return jsonResponse({ id: 512, message: 'criado' }, 201);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  const created = await client.createProject({
+    name: 'Projeto filho',
+    parent_project_id: 85,
+    content: 'Descrição',
+  });
+
+  assert.equal(created.id, 512);
+  const createRequest = requests.find(({ method }) => method === 'POST');
+  assert.deepEqual(JSON.parse(createRequest.body), {
+    input: { name: 'Projeto filho', projects_id: 85, content: 'Descrição' },
+  });
+  await client.close();
+});
+
+test('atualiza ou remove o projeto-pai de um projeto existente', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/Project/85')) {
+      return jsonResponse({ id: 85, name: 'Projeto pai', projects_id: 0, entities_id: 0 });
+    }
+    if (url.endsWith('/Project/128?session_write=true') && options.method === 'PUT') {
+      return jsonResponse([{ 128: true, message: '' }]);
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('Rota inesperada no teste.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  await client.updateProject(128, { parent_project_id: 85 });
+  await client.updateProject(128, { parent_project_id: 0 });
+
+  const updates = requests.filter(({ method }) => method === 'PUT');
+  assert.deepEqual(JSON.parse(updates[0].body), { input: { id: 128, projects_id: 85 } });
+  assert.deepEqual(JSON.parse(updates[1].body), { input: { id: 128, projects_id: 0 } });
+  await client.close();
+});
+
+test('impede criar ciclo na hierarquia ao mover um projeto para um descendente', async () => {
+  const requests = [];
+  const fetchMock = async (url, options) => {
+    requests.push({ url, ...options });
+    if (url.endsWith('/initSession')) {
+      return jsonResponse({ session_token: 'sessao-ficticia' });
+    }
+    if (url.endsWith('/Project/85')) {
+      return jsonResponse({ id: 85, name: 'Descendente', projects_id: 128, entities_id: 0 });
+    }
+    if (url.endsWith('/killSession')) {
+      return jsonResponse({});
+    }
+    throw new Error('A ferramenta não deveria gravar nesta hierarquia.');
+  };
+  const client = new GlpiClient(writeConfig, fetchMock);
+
+  await assert.rejects(
+    client.updateProject(128, { parent_project_id: 85 }),
+    /não pode ser pai de si mesmo/u,
+  );
+  assert.equal(requests.some(({ method }) => method === 'PUT'), false);
   await client.close();
 });
 
